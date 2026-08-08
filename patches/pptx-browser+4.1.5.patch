@@ -1,0 +1,426 @@
+diff --git a/node_modules/pptx-browser/src/render.js b/node_modules/pptx-browser/src/render.js
+index 8d0e215..3ea4341 100644
+--- a/node_modules/pptx-browser/src/render.js
++++ b/node_modules/pptx-browser/src/render.js
+@@ -585,192 +585,183 @@ export async function renderTextBody(ctx, txBody, bx, by, bw, bh, scale, themeCo
+ 
+   const paragraphs = gtn(txBody, 'p');
+ 
+-  // First pass: build layout (lines, positions) so we can apply vertical alignment
+-  const paraLayouts = [];
+-  let totalHeight = 0;
+-
+-  for (const para of paragraphs) {
+-    const pPr = g1(para, 'pPr');
+-    const algn = attr(pPr, 'algn', 'l'); // l, ctr, r, just, dist
+-    const lvl = attrInt(pPr, 'lvl', 0);
+-    const marL = attrInt(pPr, 'marL', 0) * scale;
+-    const indent = attrInt(pPr, 'indent', 0) * scale;
+-
+-    // ── Bullet / list marker ─────────────────────────────────────────────────
+-    const bullet = pPr ? parseBullet(pPr, defRPr, themeColors, themeData) : null;
+-
+-    // Spacing
+-    const spcBef = g1(pPr, 'spcBef');
+-    const spcAft = g1(pPr, 'spcAft');
+-    const lnSpc = g1(pPr, 'lnSpc');
+-    const defRPr = g1(pPr, 'defRPr');
+-
+-    // Default font size: lstStyle (lowest) → pPr defRPr (higher) → run rPr (highest)
+-    let paraDefSz = defaultFontSz;
+-    if (lstDefRPr) {
+-      const sz = lstDefRPr.getAttribute('sz');
+-      if (sz) paraDefSz = parseInt(sz, 10);
+-    }
+-    if (defRPr) {
+-      const sz = defRPr.getAttribute('sz');
+-      if (sz) paraDefSz = parseInt(sz, 10);
+-    }
+-
+-    // Get space before/after in px
+-    let spaceBefore = 0, spaceAfter = 0;
+-    if (spcBef) {
+-      const sp = g1(spcBef, 'spcPct');
+-      const spp = g1(spcBef, 'spcPts');
+-      if (sp) spaceBefore = (paraDefSz * 127 * scale) * (attrInt(sp, 'val', 0) / 100000);
+-      else if (spp) spaceBefore = attrInt(spp, 'val', 0) * EMU_PER_PT * scale / 100;
+-    }
+-    if (spcAft) {
+-      const sp = g1(spcAft, 'spcPct');
+-      const spp = g1(spcAft, 'spcPts');
+-      if (sp) spaceAfter = (paraDefSz * 127 * scale) * (attrInt(sp, 'val', 0) / 100000);
+-      else if (spp) spaceAfter = attrInt(spp, 'val', 0) * EMU_PER_PT * scale / 100;
+-    }
++  // Layout pass — re-runnable after font-scale shrink so wrapping/metrics stay correct
++  function buildLayouts(fontScale) {
++    const layouts = [];
++    let height = 0;
++    let maxLineW = 0;
++
++    for (const para of paragraphs) {
++      const pPr = g1(para, 'pPr');
++      const algn = attr(pPr, 'algn', 'l'); // l, ctr, r, just, dist
++      const marL = attrInt(pPr, 'marL', 0) * scale;
++      const indent = attrInt(pPr, 'indent', 0) * scale;
++
++      // Spacing
++      const spcBef = g1(pPr, 'spcBef');
++      const spcAft = g1(pPr, 'spcAft');
++      const lnSpc = g1(pPr, 'lnSpc');
++      // defRPr must be resolved before parseBullet (TDZ crash otherwise)
++      const defRPr = pPr ? g1(pPr, 'defRPr') : null;
++
++      // ── Bullet / list marker ─────────────────────────────────────────────────
++      const bullet = pPr ? parseBullet(pPr, defRPr, themeColors, themeData) : null;
++
++      // Default font size: lstStyle (lowest) → pPr defRPr (higher) → run rPr (highest)
++      let paraDefSz = defaultFontSz;
++      if (lstDefRPr) {
++        const sz = lstDefRPr.getAttribute('sz');
++        if (sz) paraDefSz = parseInt(sz, 10);
++      }
++      if (defRPr) {
++        const sz = defRPr.getAttribute('sz');
++        if (sz) paraDefSz = parseInt(sz, 10);
++      }
+ 
+-    // Collect runs (a:r, a:br)
+-    const runEls = [];
+-    for (const child of para.children) {
+-      const ln = child.localName;
+-      if (ln === 'r' || ln === 'br' || ln === 'fld') runEls.push(child);
+-    }
++      // Get space before/after in px
++      let spaceBefore = 0, spaceAfter = 0;
++      if (spcBef) {
++        const sp = g1(spcBef, 'spcPct');
++        const spp = g1(spcBef, 'spcPts');
++        if (sp) spaceBefore = (paraDefSz * 127 * scale * fontScale) * (attrInt(sp, 'val', 0) / 100000);
++        else if (spp) spaceBefore = attrInt(spp, 'val', 0) * EMU_PER_PT * scale / 100;
++      }
++      if (spcAft) {
++        const sp = g1(spcAft, 'spcPct');
++        const spp = g1(spcAft, 'spcPts');
++        if (sp) spaceAfter = (paraDefSz * 127 * scale * fontScale) * (attrInt(sp, 'val', 0) / 100000);
++        else if (spp) spaceAfter = attrInt(spp, 'val', 0) * EMU_PER_PT * scale / 100;
++      }
+ 
+-    // Check if paragraph is empty
+-    if (runEls.length === 0) {
+-      const endParaRPr = g1(para, 'endParaRPr');
+-      const sz = attrInt(endParaRPr || defRPr, 'sz', paraDefSz);
+-      const szPx = sz * 127 * scale * fontScaleAttr;
+-      paraLayouts.push({ lines: [''], algn, marL, spaceBefore, spaceAfter, szPx, lnSpc, runs: [], emptyPara: true, bullet });
+-      totalHeight += spaceBefore + szPx * 1.2 + spaceAfter;
+-      continue;
+-    }
++      // Collect runs (a:r, a:br)
++      const runEls = [];
++      for (const child of para.children) {
++        const ln = child.localName;
++        if (ln === 'r' || ln === 'br' || ln === 'fld') runEls.push(child);
++      }
+ 
+-    // Build text lines by processing runs
+-    // Each line item: [{ text, rPr, font, color }, ...]
+-    let paraLines = [];
+-    let currentLine = [];
+-    let maxSzPx = 0;
+-
+-    for (const runEl of runEls) {
+-      if (runEl.localName === 'br') {
+-        // Line break
+-        paraLines.push({ runs: currentLine, maxSzPx: Math.max(maxSzPx, paraDefSz * 127 * scale) });
+-        currentLine = [];
+-        maxSzPx = 0;
++      // Check if paragraph is empty
++      if (runEls.length === 0) {
++        const endParaRPr = g1(para, 'endParaRPr');
++        const sz = attrInt(endParaRPr || defRPr, 'sz', paraDefSz);
++        const szPx = sz * 127 * scale * fontScale;
++        layouts.push({ lines: [''], algn, marL, spaceBefore, spaceAfter, szPx, lnSpc, runs: [], emptyPara: true, bullet });
++        height += spaceBefore + szPx * 1.2 + spaceAfter;
+         continue;
+       }
+ 
+-      const rPr = g1(runEl, 'rPr');
+-      const tEl = g1(runEl, 't');
+-      let text = tEl ? tEl.textContent : '';
+-
+-      // Build font using full inheritance chain: rPr → pPr defRPr → lstStyle defRPr
+-      const fontInfo = buildFontInherited(rPr, defRPr, scale * fontScaleAttr, themeData, paraDefSz, lstDefRPr);
+-      ctx.font = fontInfo.fontStr;
+-      const szPx = fontInfo.szPx;
+-      if (szPx > maxSzPx) maxSzPx = szPx;
+-
+-      const color = getRunColorInherited(rPr, defRPr, themeColors);
+-      const underline = resolveRPrAttr(rPr, defRPr, 'u', 'none') !== 'none';
+-      const strikethrough = resolveRPrAttr(rPr, defRPr, 'strike', 'noStrike') !== 'noStrike';
+-      const baseline = parseInt(resolveRPrAttr(rPr, defRPr, 'baseline', '0'), 10);
+-
+-      if (doWrap) {
+-        // Need to wrap this run's text within remaining line space
+-        const words = text.split(' ');
+-        for (let wi = 0; wi < words.length; wi++) {
+-          const word = words[wi];
+-          const testRun = { text: word, rPr, fontInfo, color, underline, strikethrough, baseline };
+-          // Compute current line width
+-          let lineW = indent + marL;
+-          for (const run of currentLine) {
+-            ctx.font = run.fontInfo.fontStr;
+-            lineW += ctx.measureText(run.text).width;
+-          }
+-          ctx.font = fontInfo.fontStr;
+-          const wordW = ctx.measureText(word).width;
+-          const sep = currentLine.length ? ctx.measureText(' ').width : 0;
+-
+-          if (lineW + sep + wordW > tw && currentLine.length > 0) {
+-            paraLines.push({ runs: currentLine, maxSzPx: Math.max(maxSzPx, szPx) });
+-            currentLine = [{ text: word, rPr, fontInfo, color, underline, strikethrough, baseline }];
+-            maxSzPx = szPx;
+-          } else {
+-            if (currentLine.length > 0) {
+-              // Append space to previous run or add space run
+-              const spaceRun = { text: ' ', rPr, fontInfo, color, underline: false, strikethrough: false, baseline };
+-              currentLine.push(spaceRun);
++      // Build text lines by processing runs
++      let paraLines = [];
++      let currentLine = [];
++      let maxSzPx = 0;
++
++      for (const runEl of runEls) {
++        if (runEl.localName === 'br') {
++          paraLines.push({ runs: currentLine, maxSzPx: Math.max(maxSzPx, paraDefSz * 127 * scale * fontScale) });
++          currentLine = [];
++          maxSzPx = 0;
++          continue;
++        }
++
++        const rPr = g1(runEl, 'rPr');
++        const tEl = g1(runEl, 't');
++        let text = tEl ? tEl.textContent : '';
++
++        const fontInfo = buildFontInherited(rPr, defRPr, scale * fontScale, themeData, paraDefSz, lstDefRPr);
++        ctx.font = fontInfo.fontStr;
++        const szPx = fontInfo.szPx;
++        if (szPx > maxSzPx) maxSzPx = szPx;
++
++        const color = getRunColorInherited(rPr, defRPr, themeColors);
++        const underline = resolveRPrAttr(rPr, defRPr, 'u', 'none') !== 'none';
++        const strikethrough = resolveRPrAttr(rPr, defRPr, 'strike', 'noStrike') !== 'noStrike';
++        const baseline = parseInt(resolveRPrAttr(rPr, defRPr, 'baseline', '0'), 10);
++
++        if (doWrap) {
++          const words = text.split(' ');
++          for (let wi = 0; wi < words.length; wi++) {
++            const word = words[wi];
++            let lineW = indent + marL;
++            for (const run of currentLine) {
++              ctx.font = run.fontInfo.fontStr;
++              lineW += ctx.measureText(run.text).width;
++            }
++            ctx.font = fontInfo.fontStr;
++            const wordW = ctx.measureText(word).width;
++            const sep = currentLine.length ? ctx.measureText(' ').width : 0;
++
++            if (lineW + sep + wordW > tw && currentLine.length > 0) {
++              paraLines.push({ runs: currentLine, maxSzPx: Math.max(maxSzPx, szPx) });
++              currentLine = [{ text: word, rPr, fontInfo, color, underline, strikethrough, baseline }];
++              maxSzPx = szPx;
++            } else {
++              if (currentLine.length > 0) {
++                const spaceRun = { text: ' ', rPr, fontInfo, color, underline: false, strikethrough: false, baseline };
++                currentLine.push(spaceRun);
++              }
++              currentLine.push({ text: word, rPr, fontInfo, color, underline, strikethrough, baseline });
+             }
+-            currentLine.push({ text: word, rPr, fontInfo, color, underline, strikethrough, baseline });
+           }
++        } else {
++          currentLine.push({ text, rPr, fontInfo, color, underline, strikethrough, baseline });
++          if (szPx > maxSzPx) maxSzPx = szPx;
+         }
+-      } else {
+-        currentLine.push({ text, rPr, fontInfo, color, underline, strikethrough, baseline });
+-        if (szPx > maxSzPx) maxSzPx = szPx;
+       }
+-    }
+ 
+-    if (currentLine.length > 0) {
+-      paraLines.push({ runs: currentLine, maxSzPx: Math.max(maxSzPx, paraDefSz * 127 * scale) });
+-    }
++      if (currentLine.length > 0) {
++        paraLines.push({ runs: currentLine, maxSzPx: Math.max(maxSzPx, paraDefSz * 127 * scale * fontScale) });
++      }
+ 
+-    const lnSpcPx = lnSpc ? computeLineHeight(lnSpc, paraDefSz * 127 * scale * fontScaleAttr, scale) : null;
+-    paraLayouts.push({ lines: paraLines, algn, marL, indent, spaceBefore, spaceAfter, lnSpcPx, emptyPara: false, bullet });
++      const lnSpcPx = lnSpc ? computeLineHeight(lnSpc, paraDefSz * 127 * scale * fontScale, scale) : null;
++      layouts.push({ lines: paraLines, algn, marL, indent, spaceBefore, spaceAfter, lnSpcPx, emptyPara: false, bullet });
+ 
+-    for (const line of paraLines) {
+-      totalHeight += spaceBefore + (lnSpcPx || line.maxSzPx * 1.2) + spaceAfter;
++      for (const line of paraLines) {
++        height += spaceBefore + (lnSpcPx || line.maxSzPx * 1.2) + spaceAfter;
++        let lineW = indent + marL;
++        for (const run of line.runs) {
++          ctx.font = run.fontInfo.fontStr;
++          lineW += ctx.measureText(run.text).width;
++        }
++        if (lineW > maxLineW) maxLineW = lineW;
++      }
+     }
++
++    return { layouts, height, maxLineW };
+   }
+ 
+-  // Auto-shrink: if normAutoFit is present without explicit fontScale,
+-  // and text overflows the box, iteratively reduce fontScaleAttr until it fits.
+-  if (normAutoFit && !explicitFontScale && totalHeight > th && th > 0) {
+-    // Binary-search for a scale that fits (max 8 iterations)
+-    let lo = 0.3, hi = 1.0;
+-    for (let iter = 0; iter < 8; iter++) {
++  let { layouts: paraLayouts, height: totalHeight, maxLineW } = buildLayouts(fontScaleAttr);
++
++  // Shrink-to-fit when text overflows. Substitute fonts (e.g. Carlito for Calibri)
++  // often run wider than the authored metrics; without shrink, wrap + center
++  // alignment pushes glyphs above the clip and cuts off letter tops.
++  if (
++    !explicitFontScale &&
++    tw > 1 &&
++    th > 1 &&
++    (totalHeight > th + 0.5 || maxLineW > tw + 0.5)
++  ) {
++    let lo = 0.45, hi = 1.0;
++    let best = 0.45;
++    for (let iter = 0; iter < 10; iter++) {
+       const mid = (lo + hi) / 2;
+-      // Recompute totalHeight with this scale
+-      let testH = 0;
+-      for (const para of paragraphs) {
+-        const pPr2 = g1(para, 'pPr');
+-        const defRPr2 = pPr2 ? g1(pPr2, 'defRPr') : null;
+-        let pSz = defaultFontSz;
+-        if (lstDefRPr) { const v = lstDefRPr.getAttribute('sz'); if (v) pSz = parseInt(v, 10); }
+-        if (defRPr2) { const v = defRPr2.getAttribute('sz'); if (v) pSz = parseInt(v, 10); }
+-        const runEls2 = Array.from(para.children).filter(c => ['r','br','fld'].includes(c.localName));
+-        const szPx = pSz * 127 * scale * mid;
+-        if (runEls2.length === 0) { testH += szPx * 1.2; continue; }
+-        // Estimate: total text length / avg chars per line at this font size
+-        const totalText = runEls2.reduce((s, e) => {
+-          const t = g1(e, 't');
+-          return s + (t ? t.textContent.length : 0);
+-        }, 0);
+-        const effectiveTw = tw > 0 ? tw : bw; // fallback to full width if insets eat everything
+-        // Measure average char width using a representative sample of the actual text
+-        const sampleText = totalText > 0
+-          ? runEls2.reduce((s, e) => { const t = g1(e, 't'); return s + (t ? t.textContent : ''); }, '').slice(0, 20)
+-          : 'W';
+-        ctx.font = `${szPx}px sans-serif`;
+-        const avgCharW = sampleText.length > 0 ? ctx.measureText(sampleText).width / sampleText.length : szPx * 0.6;
+-        const charsPerLine = Math.max(1, Math.floor(effectiveTw / avgCharW));
+-        const estLines = Math.max(1, Math.ceil(totalText / charsPerLine));
+-        testH += estLines * szPx * 1.2;
++      const trial = buildLayouts(mid);
++      if (trial.height <= th + 0.5 && trial.maxLineW <= tw + 0.5) {
++        best = mid;
++        lo = mid;
++      } else {
++        hi = mid;
+       }
+-      // Rough estimate: if testH fits, go bigger, else go smaller
+-      if (testH <= th) lo = mid; else hi = mid;
+     }
+-    fontScaleAttr = (lo + hi) / 2;
++    fontScaleAttr = best;
++    ({ layouts: paraLayouts, height: totalHeight, maxLineW } = buildLayouts(fontScaleAttr));
+   }
+ 
+-  // Vertical alignment
++  // Vertical alignment — clamp so centering never pushes glyphs above the box
+   let startY = ty;
+   if (anchor === 'ctr') {
+-    startY = ty + (th - totalHeight) / 2;
++    startY = ty + Math.max(0, (th - totalHeight) / 2);
+   } else if (anchor === 'b') {
+-    startY = ty + th - totalHeight;
++    startY = ty + Math.max(0, th - totalHeight);
+   }
+ 
+ 
+@@ -868,8 +859,9 @@ export async function renderTextBody(ctx, txBody, bx, by, bw, bh, scale, themeCo
+ 
+       // ── Draw each run ──────────────────────────────────────────────────────
+       for (const run of runs) {
++        // getRunColorInherited already returns a CSS string (or null)
+         const c = run.color;
+-        ctx.fillStyle = c ? colorToCss(c) : '#000000';
++        ctx.fillStyle = (typeof c === 'string' && c) ? c : (c ? colorToCss(c) : '#000000');
+ 
+         // Superscript / subscript: smaller font + vertical offset
+         let drawY = baseline;
+@@ -1048,13 +1040,21 @@ export async function renderShape(ctx, spEl, rels, imageCache, themeColors, them
+     }
+   }
+ 
++  // Direct child only — g1() is deep and wrongly matches <a:ln><a:noFill/> over a sibling solidFill
++  const directChild = (parent, localName) => {
++    if (!parent) return null;
++    for (const child of parent.children) {
++      if (child.localName === localName) return child;
++    }
++    return null;
++  };
++
+   // Draw the path for fill / outline
+   const getFill = () => {
+-    // 1. spPr explicit fill (highest priority)
+-    const fillNames = ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'];
+-    for (const fn of fillNames) {
+-      const el = g1(spPr, fn);
+-      if (el) return el;
++    // 1. spPr explicit fill (highest priority) — first matching direct child
++    const fillNames = new Set(['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill']);
++    for (const child of spPr ? spPr.children : []) {
++      if (fillNames.has(child.localName)) return child;
+     }
+     // 2. style.fillRef — theme-based fill colour for this shape
+     const styleEl = g1(spEl, 'style');
+@@ -1078,7 +1078,7 @@ export async function renderShape(ctx, spEl, rels, imageCache, themeColors, them
+ 
+   const getOutline = () => {
+     // spPr explicit line (highest priority)
+-    const ln = g1(spPr, 'ln');
++    const ln = directChild(spPr, 'ln');
+     if (ln) return ln;
+     // style.lnRef — theme-based line for this shape
+     const styleEl = g1(spEl, 'style');
+@@ -1171,12 +1171,13 @@ export async function renderShape(ctx, spEl, rels, imageCache, themeColors, them
+       }
+     }
+     ctx.restore();
+-    // Still render text
++    // Still render text — pad clip so ascenders/descenders aren't hard-cut
+     const txBody = g1(spEl, 'txBody');
+     if (txBody) {
+       ctx.save();
++      const pad = Math.max(2, Math.min(w, h) * 0.04);
+       ctx.beginPath();
+-      ctx.rect(x, y, w, h);
++      ctx.rect(x - pad, y - pad, w + pad * 2, h + pad * 2);
+       ctx.clip();
+       const defSz = getDefaultFontSize(spEl, themeData);
+       await renderTextBody(ctx, txBody, x, y, w, h, scale, themeColors, themeData, defSz);
+@@ -1242,9 +1243,10 @@ export async function renderShape(ctx, spEl, rels, imageCache, themeColors, them
+       if (flipV) ctx.scale(1, -1);
+       ctx.translate(-cx, -cy);
+     }
+-    // Clip to shape bounds
++    // Pad clip slightly — PowerPoint allows minor overflow; hard clips cut letter tops
++    const pad = Math.max(2, Math.min(w, h) * 0.04);
+     ctx.beginPath();
+-    ctx.rect(x, y, w, h);
++    ctx.rect(x - pad, y - pad, w + pad * 2, h + pad * 2);
+     ctx.clip();
+     const defSz = getDefaultFontSize(spEl, themeData);
+     await renderTextBody(ctx, txBody, x, y, w, h, scale, themeColors, themeData, defSz);

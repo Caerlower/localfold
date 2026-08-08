@@ -1,26 +1,228 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #0f1412;
+  --ink-soft: #5c6760;
+  --mist: #f3f5f4;
+  --paper: #ffffff;
+  --canvas: #f4f7f5;
+  --line: #e6ebe8;
+  --line-strong: #d0d8d3;
+  --moss: #0f8a5f;
+  --moss-deep: #0b6b49;
+  --moss-soft: #e8f6f0;
+  --danger: #c0392b;
+  --shadow-sm: 0 1px 2px rgba(15, 20, 18, 0.04);
+  --shadow: 0 6px 24px rgba(15, 20, 18, 0.05);
+  --shadow-hover: 0 12px 32px rgba(15, 20, 18, 0.08);
+  /* --font-display set by next/font (Fraunces) on <html> */
+  --font-body: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 16px;
+  /* Full-width header height */
+  --nav-clearance: 3.5rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@media (min-width: 640px) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --nav-clearance: 4rem;
   }
 }
 
+@theme inline {
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-mist: var(--mist);
+  --color-paper: var(--paper);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-moss: var(--moss);
+  --color-moss-deep: var(--moss-deep);
+  --color-moss-soft: var(--moss-soft);
+  --font-sans: var(--font-body);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  min-height: 100%;
+  color: var(--ink);
+  font-family: var(--font-body);
+  background: var(--canvas);
+}
+
+::selection {
+  background: rgba(15, 138, 95, 0.18);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Instant press feedback — respond on pointer-down */
+.pressable {
+  transition: transform 100ms ease-out;
+}
+
+.pressable:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pressable:active {
+    transform: none;
+  }
+}
+
+@keyframes hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.hero-float {
+  animation: hero-float 5.5s ease-in-out infinite;
+}
+
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+.hero-chip {
+  animation: chip-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-float,
+  .hero-chip {
+    animation: none;
+  }
+}
+
+.tool-card:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: 2px;
+}
+
+/* Horizontal category chips on small screens */
+.category-scroll {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
+}
+
+.category-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .category-scroll {
+    mask-image: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-rise {
+    animation: none;
+  }
+}
+
+/* pdf.js TextLayer — must match painted page for click-accurate redaction */
+.lf-redact-page {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lf-textLayer {
+  color-scheme: only light;
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+  /* Layer itself doesn't capture — only text spans do (so logos are draggable) */
+  pointer-events: none;
+  --scale-factor: 1;
+  --total-scale-factor: var(--scale-factor);
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.lf-textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+  pointer-events: auto;
+}
+
+.lf-textLayer > :not(.markedContent),
+.lf-textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(var(--min-font-size-inv));
+}
+
+.lf-textLayer .markedContent {
+  display: contents;
+}
+
+.lf-textLayer span[data-lf-key]:hover {
+  background: rgb(43 125 233 / 0.28);
+}
+
+.lf-textLayer span.lf-marked {
+  background: rgb(192 57 43 / 0.4) !important;
 }
