@@ -485,8 +485,10 @@ export type RedactPdfOptions = {
 };
 
 /**
- * Black out regions (and optional text matches). Regions use normalized
- * top-left coords; PDF drawing uses bottom-left points.
+ * Black out regions (and optional text matches).
+ * Regions are normalized top-left 0–1 in the pdf.js *display* viewport
+ * (same space as the redact studio). We map them back to PDF user space
+ * with convertToPdfPoint so CropBox / rotation stay aligned.
  */
 export async function redactPdf(
   file: File,
@@ -504,18 +506,13 @@ export async function redactPdf(
 
   if (phrase) {
     const hits = await findTextRects(file, phrase);
-    const docProbe = await PDFDocument.load(await file.arrayBuffer());
     for (const hit of hits) {
-      const page = docProbe.getPages()[hit.pageIndex];
-      if (!page) continue;
-      const { width, height } = page.getSize();
-      if (width <= 0 || height <= 0) continue;
       regions.push({
         pageIndex: hit.pageIndex,
-        x: hit.x / width,
-        y: 1 - (hit.y + hit.h) / height,
-        w: hit.w / width,
-        h: hit.h / height,
+        x: hit.x,
+        y: hit.y,
+        w: hit.w,
+        h: hit.h,
       });
     }
   }
@@ -528,25 +525,41 @@ export async function redactPdf(
     );
   }
 
-  const doc = await PDFDocument.load(await file.arrayBuffer());
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc = await PDFDocument.load(bytes);
   const pages = doc.getPages();
+  const jsDoc = await loadPdfJs(bytes);
+
   for (const r of regions) {
     const page = pages[r.pageIndex];
     if (!page) continue;
-    const { width, height } = page.getSize();
-    const x = Math.max(0, r.x * width);
-    const h = Math.max(1, r.h * height);
-    const w = Math.max(1, r.w * width);
-    const y = height - r.y * height - h;
+    const jsPage = await jsDoc.getPage(r.pageIndex + 1);
+    const viewport = jsPage.getViewport({ scale: 1 });
+    if (viewport.width <= 0 || viewport.height <= 0) continue;
+
+    const x0 = r.x * viewport.width;
+    const y0 = r.y * viewport.height;
+    const x1 = (r.x + r.w) * viewport.width;
+    const y1 = (r.y + r.h) * viewport.height;
+    const [pdfX0, pdfY0] = viewport.convertToPdfPoint(x0, y0);
+    const [pdfX1, pdfY1] = viewport.convertToPdfPoint(x1, y1);
+
+    const x = Math.min(pdfX0, pdfX1);
+    const y = Math.min(pdfY0, pdfY1);
+    const width = Math.max(1, Math.abs(pdfX1 - pdfX0));
+    const height = Math.max(1, Math.abs(pdfY1 - pdfY0));
+
     page.drawRectangle({
       x,
       y,
-      width: w,
-      height: h,
+      width,
+      height,
       color: rgb(0, 0, 0),
       borderWidth: 0,
     });
   }
+
+  jsDoc.cleanup();
   doc.setProducer("LocalFold redact (local-only)");
   return doc.save({ useObjectStreams: true });
 }

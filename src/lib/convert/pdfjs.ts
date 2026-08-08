@@ -349,12 +349,41 @@ export async function extractPdfText(file: File): Promise<string[]> {
   return pages;
 }
 
+type VpBox = { left: number; top: number; right: number; bottom: number; text: string };
+
+function mergeVpBoxes(a: VpBox, b: VpBox): VpBox {
+  return {
+    left: Math.min(a.left, b.left),
+    top: Math.min(a.top, b.top),
+    right: Math.max(a.right, b.right),
+    bottom: Math.max(a.bottom, b.bottom),
+    text: `${a.text}${b.text}`,
+  };
+}
+
+/**
+ * Find phrase matches as normalized top-left rects (0–1 of the displayed
+ * pdf.js viewport). Coordinates match TextLayer / studio overlays.
+ */
 export async function findTextRects(
   file: File,
   phrase: string,
 ): Promise<{ pageIndex: number; x: number; y: number; w: number; h: number }[]> {
   const needle = phrase.trim().toLowerCase();
   if (!needle) return [];
+  await ensureWorker();
+  const pdfjs = await import("pdfjs-dist");
+  const transform =
+    pdfjs.Util?.transform ??
+    ((m1: number[], m2: number[]) => [
+      m1[0] * m2[0] + m1[2] * m2[1],
+      m1[1] * m2[0] + m1[3] * m2[1],
+      m1[0] * m2[2] + m1[2] * m2[3],
+      m1[1] * m2[2] + m1[3] * m2[3],
+      m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+      m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+    ]);
+
   const doc = await loadPdfJs(new Uint8Array(await file.arrayBuffer()));
   const hits: {
     pageIndex: number;
@@ -366,32 +395,108 @@ export async function findTextRects(
 
   for (let i = 1; i <= doc.numPages; i += 1) {
     const page = await doc.getPage(i);
-    const { lines } = await extractPageLines(page);
-    for (const line of lines) {
-      const lower = line.text.toLowerCase();
+    const viewport = page.getViewport({ scale: 1 });
+    const vw = viewport.width;
+    const vh = viewport.height;
+    if (vw <= 0 || vh <= 0) continue;
+
+    const content = await page.getTextContent();
+    type Run = VpBox & { start: number; end: number };
+    let line: Run[] = [];
+    let cursor = 0;
+    let lineText = "";
+
+    const flushLine = () => {
+      if (!line.length) return;
+      const lower = lineText.toLowerCase();
       let from = 0;
       while (from < lower.length) {
         const at = lower.indexOf(needle, from);
         if (at < 0) break;
-        const ratioStart = at / Math.max(line.text.length, 1);
-        const ratioEnd = (at + needle.length) / Math.max(line.text.length, 1);
-        const lineWidth = line.items.reduce((w, it) => w + it.width, 0);
-        const x = line.x + lineWidth * ratioStart;
-        const w = Math.max(
-          lineWidth * (ratioEnd - ratioStart),
-          needle.length * line.fontSize * 0.45,
-        );
-        hits.push({
-          pageIndex: i - 1,
-          x: x - 1,
-          y: line.y - line.fontSize * 0.2,
-          w: w + 2,
-          h: line.fontSize * 1.15,
-        });
-        from = at + needle.length;
+        const end = at + needle.length;
+        let box: VpBox | null = null;
+        for (const run of line) {
+          if (run.end <= at || run.start >= end) continue;
+          box = box ? mergeVpBoxes(box, run) : { ...run };
+        }
+        if (box) {
+          const padX = 1.5;
+          const padY = 1;
+          const left = Math.max(0, box.left - padX);
+          const top = Math.max(0, box.top - padY);
+          const right = Math.min(vw, box.right + padX);
+          const bottom = Math.min(vh, box.bottom + padY);
+          hits.push({
+            pageIndex: i - 1,
+            x: left / vw,
+            y: top / vh,
+            w: (right - left) / vw,
+            h: (bottom - top) / vh,
+          });
+        }
+        from = end;
       }
+      line = [];
+      lineText = "";
+      cursor = 0;
+    };
+
+    for (const raw of content.items) {
+      if (!("str" in raw)) continue;
+      if (raw.hasEOL) {
+        // EOL marker may accompany an empty str
+      }
+      if (!raw.str) {
+        if (raw.hasEOL) flushLine();
+        continue;
+      }
+
+      const tx = transform(viewport.transform, raw.transform);
+      const fontH = Math.hypot(tx[2], tx[3]) || raw.height || 10;
+      const width = Math.max(
+        raw.width || fontH * raw.str.length * 0.5,
+        fontH * 0.25,
+      );
+      const height = Math.max(raw.height || 0, fontH * 0.9, 4);
+      const left = tx[4];
+      const top = tx[5] - height;
+
+      // Soft line break when vertical jump is large (reading-order grouping)
+      if (line.length) {
+        const prev = line[line.length - 1];
+        const sameLine =
+          Math.abs(top - prev.top) < Math.max(8, height * 0.65);
+        if (!sameLine) flushLine();
+      }
+
+      if (line.length && lineText.length) {
+        // Preserve a single space between runs when the gap is wide
+        const prev = line[line.length - 1];
+        const gap = left - prev.right;
+        if (gap > fontH * 0.35 && !lineText.endsWith(" ") && !/^\s/.test(raw.str)) {
+          lineText += " ";
+          cursor += 1;
+        }
+      }
+
+      const start = cursor;
+      lineText += raw.str;
+      cursor += raw.str.length;
+      line.push({
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        text: raw.str,
+        start,
+        end: cursor,
+      });
+
+      if (raw.hasEOL) flushLine();
     }
+    flushLine();
   }
+
   doc.cleanup();
   return hits;
 }
@@ -406,18 +511,6 @@ export type SelectableText = {
   w: number;
   h: number;
 };
-
-type VpBox = { left: number; top: number; right: number; bottom: number; text: string };
-
-function mergeVpBoxes(a: VpBox, b: VpBox): VpBox {
-  return {
-    left: Math.min(a.left, b.left),
-    top: Math.min(a.top, b.top),
-    right: Math.max(a.right, b.right),
-    bottom: Math.max(a.bottom, b.bottom),
-    text: `${a.text}${b.text}`,
-  };
-}
 
 function vpBoxToNorm(
   box: VpBox,

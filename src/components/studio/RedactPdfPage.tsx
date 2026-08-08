@@ -21,16 +21,38 @@ type Props = {
 };
 
 function rectFromEl(el: Element, pageEl: HTMLElement): CropRectNorm {
-  const a = el.getBoundingClientRect();
-  const b = pageEl.getBoundingClientRect();
-  const w = Math.max(b.width, 1);
-  const h = Math.max(b.height, 1);
+  const span = el as HTMLElement;
+  const pageBox = pageEl.getBoundingClientRect();
+  const pw = Math.max(pageBox.width, 1);
+  const ph = Math.max(pageBox.height, 1);
+
+  // Prefer TextLayer % placement (same space as painted glyphs) when present
+  const leftPct = span.style.left?.endsWith("%")
+    ? parseFloat(span.style.left) / 100
+    : NaN;
+  const topPct = span.style.top?.endsWith("%")
+    ? parseFloat(span.style.top) / 100
+    : NaN;
+  const spanBox = span.getBoundingClientRect();
+
+  if (Number.isFinite(leftPct) && Number.isFinite(topPct)) {
+    return clampCropRect(
+      {
+        x: leftPct,
+        y: topPct,
+        w: spanBox.width / pw,
+        h: spanBox.height / ph,
+      },
+      0.004,
+    );
+  }
+
   return clampCropRect(
     {
-      x: (a.left - b.left) / w,
-      y: (a.top - b.top) / h,
-      w: a.width / w,
-      h: a.height / h,
+      x: (spanBox.left - pageBox.left) / pw,
+      y: (spanBox.top - pageBox.top) / ph,
+      w: spanBox.width / pw,
+      h: spanBox.height / ph,
     },
     0.004,
   );
@@ -79,38 +101,43 @@ export function RedactPdfPage({
 
       // Fit page to ~820 CSS px wide for readability
       const base = page.getViewport({ scale: 1 });
-      const cssWidth = Math.min(820, Math.max(480, host.parentElement?.clientWidth || 820));
+      const cssWidth = Math.min(
+        820,
+        Math.max(480, host.parentElement?.clientWidth || 820),
+      );
       const scale = cssWidth / base.width;
       const viewport = page.getViewport({ scale });
 
-      host.style.width = `${Math.floor(viewport.width)}px`;
-      host.style.height = `${Math.floor(viewport.height)}px`;
+      // Keep host / canvas / text-layer CSS boxes identical (no Math.floor drift)
+      const cssW = viewport.width;
+      const cssH = viewport.height;
+      host.style.width = `${cssW}px`;
+      host.style.height = `${cssH}px`;
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
 
-      const ctx = canvas.getContext("2d", { alpha: false });
-      if (!ctx) throw new Error("Canvas unavailable");
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, viewport.width, viewport.height);
-
+      // Official hi-DPI path: pass transform to render (don't pre-scale the ctx)
       const task = page.render({
         canvas,
-        canvasContext: ctx,
         viewport,
+        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
         intent: "display",
-      } as Parameters<typeof page.render>[0]);
+        background: "#ffffff",
+      });
       await task.promise;
       if (cancelled) return;
 
-      // Official TextLayer — spans align with painted glyphs
+      // Official TextLayer — spans align with painted glyphs when scale vars match
       textDiv.replaceChildren();
       textDiv.style.setProperty("--scale-factor", String(scale));
-      textDiv.style.setProperty("--total-scale-factor", String(scale));
+      textDiv.style.setProperty("--user-unit", String(viewport.userUnit || 1));
+      textDiv.style.setProperty("--scale-round-x", "1px");
+      textDiv.style.setProperty("--scale-round-y", "1px");
+      // Let CSS compute --total-scale-factor = scale * userUnit
 
       const content = await page.getTextContent();
       const layer = new pdfjs.TextLayer({
@@ -121,6 +148,11 @@ export function RedactPdfPage({
       textLayer = layer;
       await layer.render();
       if (cancelled) return;
+
+      // pdf.js sizes the layer with CSS round(); pin it to the same box as the
+      // canvas/host so % positions and getBoundingClientRect stay in sync.
+      textDiv.style.width = `${cssW}px`;
+      textDiv.style.height = `${cssH}px`;
 
       // Tag spans for click targeting
       const spans = textDiv.querySelectorAll("span");

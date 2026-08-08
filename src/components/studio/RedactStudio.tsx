@@ -226,13 +226,13 @@ export function RedactStudio() {
       }
       const added: RedactMark[] = [];
       for (const hit of hits) {
-        const page = thumbs[hit.pageIndex];
-        if (!page) continue;
+        if (!thumbs[hit.pageIndex]) continue;
+        // findTextRects already returns normalized top-left (0–1) viewport coords
         const rect = clampCropRect({
-          x: hit.x / page.w,
-          y: 1 - (hit.y + hit.h) / page.h,
-          w: hit.w / page.w,
-          h: hit.h / page.h,
+          x: hit.x,
+          y: hit.y,
+          w: hit.w,
+          h: hit.h,
         });
         added.push({
           id: newId(),

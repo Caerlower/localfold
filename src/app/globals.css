@@ -176,7 +176,9 @@ body {
 .lf-textLayer {
   color-scheme: only light;
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  /* width/height come from pdf.js setLayerDimensions — don't stretch with inset */
   overflow: clip;
   opacity: 1;
   line-height: 1;
@@ -188,7 +190,10 @@ body {
   /* Layer itself doesn't capture — only text spans do (so logos are draggable) */
   pointer-events: none;
   --scale-factor: 1;
-  --total-scale-factor: var(--scale-factor);
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
   --min-font-size: 1;
   --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size));
