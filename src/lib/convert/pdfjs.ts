@@ -350,6 +350,8 @@ export async function extractPdfText(file: File): Promise<string[]> {
 }
 
 type VpBox = { left: number; top: number; right: number; bottom: number; text: string };
+type TextRun = VpBox & { start: number; end: number };
+type NormRect = { pageIndex: number; x: number; y: number; w: number; h: number };
 
 function mergeVpBoxes(a: VpBox, b: VpBox): VpBox {
   return {
@@ -361,37 +363,62 @@ function mergeVpBoxes(a: VpBox, b: VpBox): VpBox {
   };
 }
 
+function matrixTransform(m1: number[], m2: number[]): number[] {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ];
+}
+
+async function getPdfTransform(): Promise<(m1: number[], m2: number[]) => number[]> {
+  await ensureWorker();
+  const pdfjs = await import("pdfjs-dist");
+  return pdfjs.Util?.transform ?? matrixTransform;
+}
+
+/** Clip a text-run box to the matched character range inside a larger PDF item. */
+function clipRunToMatch(
+  run: TextRun,
+  matchStart: number,
+  matchEnd: number,
+): VpBox | null {
+  const overlapStart = Math.max(run.start, matchStart);
+  const overlapEnd = Math.min(run.end, matchEnd);
+  if (overlapEnd <= overlapStart) return null;
+
+  const runLen = Math.max(run.end - run.start, 1);
+  const width = run.right - run.left;
+  const left = run.left + (width * (overlapStart - run.start)) / runLen;
+  const right = run.left + (width * (overlapEnd - run.start)) / runLen;
+  const minW = Math.max(width / runLen, 3);
+
+  return {
+    left,
+    top: run.top,
+    right: Math.max(right, left + minW * 0.35),
+    bottom: run.bottom,
+    text: run.text.slice(overlapStart - run.start, overlapEnd - run.start),
+  };
+}
+
 /**
  * Find phrase matches as normalized top-left rects (0–1 of the displayed
- * pdf.js viewport). Coordinates match TextLayer / studio overlays.
+ * pdf.js viewport). Boxes cover only the matched characters, not the whole run.
  */
 export async function findTextRects(
   file: File,
   phrase: string,
-): Promise<{ pageIndex: number; x: number; y: number; w: number; h: number }[]> {
+): Promise<NormRect[]> {
   const needle = phrase.trim().toLowerCase();
   if (!needle) return [];
-  await ensureWorker();
-  const pdfjs = await import("pdfjs-dist");
-  const transform =
-    pdfjs.Util?.transform ??
-    ((m1: number[], m2: number[]) => [
-      m1[0] * m2[0] + m1[2] * m2[1],
-      m1[1] * m2[0] + m1[3] * m2[1],
-      m1[0] * m2[2] + m1[2] * m2[3],
-      m1[1] * m2[2] + m1[3] * m2[3],
-      m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
-      m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
-    ]);
 
+  const transform = await getPdfTransform();
   const doc = await loadPdfJs(new Uint8Array(await file.arrayBuffer()));
-  const hits: {
-    pageIndex: number;
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-  }[] = [];
+  const hits: NormRect[] = [];
 
   for (let i = 1; i <= doc.numPages; i += 1) {
     const page = await doc.getPage(i);
@@ -401,8 +428,7 @@ export async function findTextRects(
     if (vw <= 0 || vh <= 0) continue;
 
     const content = await page.getTextContent();
-    type Run = VpBox & { start: number; end: number };
-    let line: Run[] = [];
+    let line: TextRun[] = [];
     let cursor = 0;
     let lineText = "";
 
@@ -416,16 +442,16 @@ export async function findTextRects(
         const end = at + needle.length;
         let box: VpBox | null = null;
         for (const run of line) {
-          if (run.end <= at || run.start >= end) continue;
-          box = box ? mergeVpBoxes(box, run) : { ...run };
+          const clipped = clipRunToMatch(run, at, end);
+          if (!clipped) continue;
+          box = box ? mergeVpBoxes(box, clipped) : clipped;
         }
         if (box) {
-          const padX = 1.5;
-          const padY = 1;
-          const left = Math.max(0, box.left - padX);
-          const top = Math.max(0, box.top - padY);
-          const right = Math.min(vw, box.right + padX);
-          const bottom = Math.min(vh, box.bottom + padY);
+          const pad = 0.75;
+          const left = Math.max(0, box.left - pad);
+          const top = Math.max(0, box.top - pad);
+          const right = Math.min(vw, box.right + pad);
+          const bottom = Math.min(vh, box.bottom + pad);
           hits.push({
             pageIndex: i - 1,
             x: left / vw,
@@ -443,9 +469,6 @@ export async function findTextRects(
 
     for (const raw of content.items) {
       if (!("str" in raw)) continue;
-      if (raw.hasEOL) {
-        // EOL marker may accompany an empty str
-      }
       if (!raw.str) {
         if (raw.hasEOL) flushLine();
         continue;
@@ -453,15 +476,14 @@ export async function findTextRects(
 
       const tx = transform(viewport.transform, raw.transform);
       const fontH = Math.hypot(tx[2], tx[3]) || raw.height || 10;
-      const width = Math.max(
-        raw.width || fontH * raw.str.length * 0.5,
+      const runWidth = Math.max(
+        raw.width || fontH * raw.str.length * 0.45,
         fontH * 0.25,
       );
       const height = Math.max(raw.height || 0, fontH * 0.9, 4);
       const left = tx[4];
       const top = tx[5] - height;
 
-      // Soft line break when vertical jump is large (reading-order grouping)
       if (line.length) {
         const prev = line[line.length - 1];
         const sameLine =
@@ -470,10 +492,14 @@ export async function findTextRects(
       }
 
       if (line.length && lineText.length) {
-        // Preserve a single space between runs when the gap is wide
+        // Insert a synthetic space for wide gaps (no geometry; skipped when clipping)
         const prev = line[line.length - 1];
         const gap = left - prev.right;
-        if (gap > fontH * 0.35 && !lineText.endsWith(" ") && !/^\s/.test(raw.str)) {
+        if (
+          gap > fontH * 0.35 &&
+          !lineText.endsWith(" ") &&
+          !/^\s/.test(raw.str)
+        ) {
           lineText += " ";
           cursor += 1;
         }
@@ -485,7 +511,7 @@ export async function findTextRects(
       line.push({
         left,
         top,
-        right: left + width,
+        right: left + runWidth,
         bottom: top + height,
         text: raw.str,
         start,
@@ -547,18 +573,7 @@ function vpBoxToNorm(
 export async function extractSelectableTexts(
   file: File,
 ): Promise<SelectableText[]> {
-  await ensureWorker();
-  const pdfjs = await import("pdfjs-dist");
-  const transform =
-    pdfjs.Util?.transform ??
-    ((m1: number[], m2: number[]) => [
-      m1[0] * m2[0] + m1[2] * m2[1],
-      m1[1] * m2[0] + m1[3] * m2[1],
-      m1[0] * m2[2] + m1[2] * m2[3],
-      m1[1] * m2[2] + m1[3] * m2[3],
-      m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
-      m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
-    ]);
+  const transform = await getPdfTransform();
   const doc = await loadPdfJs(new Uint8Array(await file.arrayBuffer()));
   const out: SelectableText[] = [];
 
@@ -577,8 +592,10 @@ export async function extractSelectableTexts(
       // Map PDF text matrix → viewport pixels (top-left CSS space)
       const tx = transform(viewport.transform, raw.transform);
       const fontH = Math.hypot(tx[2], tx[3]) || raw.height || 10;
-      // At scale=1, item.width matches viewport units (pdf.js text layer)
-      const width = Math.max(raw.width || fontH * raw.str.length * 0.5, fontH * 0.25);
+      const width = Math.max(
+        raw.width || fontH * raw.str.length * 0.5,
+        fontH * 0.25,
+      );
       const height = Math.max(raw.height || 0, fontH * 0.9, 4);
       const left = tx[4];
       const top = tx[5] - height;
