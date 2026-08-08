@@ -350,7 +350,12 @@ export async function extractPdfText(file: File): Promise<string[]> {
 }
 
 type VpBox = { left: number; top: number; right: number; bottom: number; text: string };
-type TextRun = VpBox & { start: number; end: number };
+type TextRun = VpBox & {
+  start: number;
+  end: number;
+  fontSize: number;
+  fontFamily: string;
+};
 type NormRect = { pageIndex: number; x: number; y: number; w: number; h: number };
 
 function mergeVpBoxes(a: VpBox, b: VpBox): VpBox {
@@ -380,7 +385,23 @@ async function getPdfTransform(): Promise<(m1: number[], m2: number[]) => number
   return pdfjs.Util?.transform ?? matrixTransform;
 }
 
-/** Clip a text-run box to the matched character range inside a larger PDF item. */
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+function getMeasureCtx(): CanvasRenderingContext2D | null {
+  if (measureCtx !== undefined) return measureCtx;
+  if (typeof document === "undefined") {
+    measureCtx = null;
+    return null;
+  }
+  const canvas = document.createElement("canvas");
+  measureCtx = canvas.getContext("2d");
+  return measureCtx;
+}
+
+/**
+ * Clip a text-run box to the matched characters using font metrics.
+ * Char-index fractions fail on proportional fonts (boxes slide left/right).
+ */
 function clipRunToMatch(
   run: TextRun,
   matchStart: number,
@@ -390,19 +411,75 @@ function clipRunToMatch(
   const overlapEnd = Math.min(run.end, matchEnd);
   if (overlapEnd <= overlapStart) return null;
 
-  const runLen = Math.max(run.end - run.start, 1);
-  const width = run.right - run.left;
-  const left = run.left + (width * (overlapStart - run.start)) / runLen;
-  const right = run.left + (width * (overlapEnd - run.start)) / runLen;
-  const minW = Math.max(width / runLen, 3);
+  const local0 = overlapStart - run.start;
+  const local1 = overlapEnd - run.start;
+  const runWidth = run.right - run.left;
+  const matchedText = run.text.slice(local0, local1);
+
+  let left = run.left;
+  let right = run.right;
+
+  if (local0 > 0 || local1 < run.text.length) {
+    const ctx = getMeasureCtx();
+    let placed = false;
+    if (ctx && run.text.length > 0) {
+      // Fallback stack — embedded PDF font names often aren't installed; we
+      // rescale to the PDF run width so totals still match the glyphs.
+      const family = run.fontFamily?.trim() || "sans-serif";
+      ctx.font = `${run.fontSize}px ${family}, sans-serif`;
+      const full = ctx.measureText(run.text).width;
+      if (full > 0.01) {
+        const scale = runWidth / full;
+        const prefix = ctx.measureText(run.text.slice(0, local0)).width * scale;
+        const matched = Math.max(
+          ctx.measureText(matchedText).width * scale,
+          run.fontSize * 0.35,
+        );
+        left = run.left + prefix;
+        right = left + matched;
+        placed = true;
+      }
+    }
+    if (!placed) {
+      // Last resort — worse on proportional fonts, but better than full run
+      const runLen = Math.max(run.text.length, 1);
+      left = run.left + (runWidth * local0) / runLen;
+      right = run.left + (runWidth * local1) / runLen;
+    }
+  }
 
   return {
     left,
     top: run.top,
-    right: Math.max(right, left + minW * 0.35),
+    right: Math.max(right, left + 2),
     bottom: run.bottom,
-    text: run.text.slice(overlapStart - run.start, overlapEnd - run.start),
+    text: matchedText,
   };
+}
+
+function pushHit(
+  hits: NormRect[],
+  pageIndex: number,
+  box: VpBox,
+  vw: number,
+  vh: number,
+) {
+  const padX = 0.6;
+  const padY = 0.4;
+  const left = Math.max(0, box.left - padX);
+  const top = Math.max(0, box.top - padY);
+  const right = Math.min(vw, box.right + padX);
+  const bottom = Math.min(vh, box.bottom + padY);
+  const w = right - left;
+  const h = bottom - top;
+  if (w < 0.5 || h < 0.5) return;
+  hits.push({
+    pageIndex,
+    x: left / vw,
+    y: top / vh,
+    w: w / vw,
+    h: h / vh,
+  });
 }
 
 /**
@@ -428,6 +505,11 @@ export async function findTextRects(
     if (vw <= 0 || vh <= 0) continue;
 
     const content = await page.getTextContent();
+    const styles = (content.styles || {}) as Record<
+      string,
+      { fontFamily?: string }
+    >;
+
     let line: TextRun[] = [];
     let cursor = 0;
     let lineText = "";
@@ -446,20 +528,7 @@ export async function findTextRects(
           if (!clipped) continue;
           box = box ? mergeVpBoxes(box, clipped) : clipped;
         }
-        if (box) {
-          const pad = 0.75;
-          const left = Math.max(0, box.left - pad);
-          const top = Math.max(0, box.top - pad);
-          const right = Math.min(vw, box.right + pad);
-          const bottom = Math.min(vh, box.bottom + pad);
-          hits.push({
-            pageIndex: i - 1,
-            x: left / vw,
-            y: top / vh,
-            w: (right - left) / vw,
-            h: (bottom - top) / vh,
-          });
-        }
+        if (box) pushHit(hits, i - 1, box, vw, vh);
         from = end;
       }
       line = [];
@@ -480,19 +549,25 @@ export async function findTextRects(
         raw.width || fontH * raw.str.length * 0.45,
         fontH * 0.25,
       );
-      const height = Math.max(raw.height || 0, fontH * 0.9, 4);
+      // Match TextLayer: baseline at tx[5], top ≈ baseline − ascent
+      const ascent = fontH * 0.8;
       const left = tx[4];
-      const top = tx[5] - height;
+      const top = tx[5] - ascent;
+      const bottom = top + fontH;
+
+      const fontName =
+        "fontName" in raw && raw.fontName ? String(raw.fontName) : "";
+      const fontFamily = styles[fontName]?.fontFamily || "sans-serif";
 
       if (line.length) {
         const prev = line[line.length - 1];
-        const sameLine =
-          Math.abs(top - prev.top) < Math.max(8, height * 0.65);
-        if (!sameLine) flushLine();
+        if (Math.abs(top - prev.top) >= Math.max(8, fontH * 0.65)) {
+          flushLine();
+        }
       }
 
       if (line.length && lineText.length) {
-        // Insert a synthetic space for wide gaps (no geometry; skipped when clipping)
+        // Synthetic space for wide gaps (no geometry; skipped when clipping)
         const prev = line[line.length - 1];
         const gap = left - prev.right;
         if (
@@ -512,10 +587,12 @@ export async function findTextRects(
         left,
         top,
         right: left + runWidth,
-        bottom: top + height,
+        bottom,
         text: raw.str,
         start,
         end: cursor,
+        fontSize: fontH,
+        fontFamily,
       });
 
       if (raw.hasEOL) flushLine();

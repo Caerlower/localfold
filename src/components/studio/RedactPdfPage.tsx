@@ -58,6 +58,71 @@ function rectFromEl(el: Element, pageEl: HTMLElement): CropRectNorm {
   );
 }
 
+function clientRectToNorm(
+  r: DOMRect,
+  pageBox: DOMRect,
+): CropRectNorm | null {
+  if (r.width < 0.5 || r.height < 0.5) return null;
+  const pw = Math.max(pageBox.width, 1);
+  const ph = Math.max(pageBox.height, 1);
+  return clampCropRect(
+    {
+      x: (r.left - pageBox.left) / pw,
+      y: (r.top - pageBox.top) / ph,
+      w: r.width / pw,
+      h: r.height / ph,
+    },
+    0.002,
+  );
+}
+
+/**
+ * Find a phrase in the rendered pdf.js TextLayer. Uses Range API client
+ * rects so marks match painted glyphs (not estimated PDF metrics).
+ */
+export function findPhraseRectsInPage(
+  pageEl: HTMLElement,
+  phrase: string,
+): CropRectNorm[] {
+  const needle = phrase.trim().toLowerCase();
+  if (!needle) return [];
+
+  const pageBox = pageEl.getBoundingClientRect();
+  const hits: CropRectNorm[] = [];
+
+  for (const span of pageEl.querySelectorAll<HTMLElement>("span[data-lf-key]")) {
+    const text = span.textContent ?? "";
+    if (!text) continue;
+    const lower = text.toLowerCase();
+    let from = 0;
+    while (from < lower.length) {
+      const at = lower.indexOf(needle, from);
+      if (at < 0) break;
+      const end = at + needle.length;
+
+      const textNode = [...span.childNodes].find(
+        (n): n is Text =>
+          n.nodeType === Node.TEXT_NODE && (n.textContent?.length ?? 0) > 0,
+      );
+
+      if (textNode) {
+        const range = document.createRange();
+        range.setStart(textNode, Math.min(at, textNode.length));
+        range.setEnd(textNode, Math.min(end, textNode.length));
+        for (const r of range.getClientRects()) {
+          const norm = clientRectToNorm(r, pageBox);
+          if (norm) hits.push(norm);
+        }
+      } else {
+        hits.push(rectFromEl(span, pageEl));
+      }
+      from = end;
+    }
+  }
+
+  return hits;
+}
+
 export function RedactPdfPage({
   doc,
   pageNumber,

@@ -10,7 +10,7 @@ import {
   Trash,
   Warning,
 } from "@phosphor-icons/react";
-import { RedactPdfPage } from "./RedactPdfPage";
+import { findPhraseRectsInPage, RedactPdfPage } from "./RedactPdfPage";
 import { loadPdfJs, findTextRects, renderPageToCanvas } from "@/lib/convert/pdfjs";
 import { redactPdf, type RedactRegion } from "@/lib/convert/pdfOps";
 import { basename, downloadBlob, formatBytes } from "@/lib/format";
@@ -218,30 +218,56 @@ export function RedactStudio() {
     setSearching(true);
     setMessage(`Searching for “${phrase}”…`);
     try {
+      // Find matches in the PDF, then prefer on-screen TextLayer boxes per page.
       const hits = await findTextRects(file, phrase);
       if (!hits.length) {
         setStatus("error");
         setMessage(`No matches for “${phrase}”.`);
         return;
       }
-      const added: RedactMark[] = [];
+
+      const byPage = new Map<number, typeof hits>();
       for (const hit of hits) {
-        if (!thumbs[hit.pageIndex]) continue;
-        // findTextRects already returns normalized top-left (0–1) viewport coords
-        const rect = clampCropRect({
-          x: hit.x,
-          y: hit.y,
-          w: hit.w,
-          h: hit.h,
-        });
-        added.push({
-          id: newId(),
-          pageIndex: hit.pageIndex,
-          ...rect,
-          label: phrase,
-          source: "search",
-        });
+        const list = byPage.get(hit.pageIndex) ?? [];
+        list.push(hit);
+        byPage.set(hit.pageIndex, list);
       }
+
+      const added: RedactMark[] = [];
+      for (const [pageIndex, pageHits] of byPage) {
+        if (!thumbs[pageIndex]) continue;
+
+        const pageEl = pageRefs.current[pageIndex]?.querySelector(
+          ".lf-redact-page",
+        ) as HTMLElement | null;
+        const domRects =
+          pageEl && pageEl.querySelector("span[data-lf-key]")
+            ? findPhraseRectsInPage(pageEl, phrase)
+            : [];
+
+        const rects =
+          domRects.length > 0
+            ? domRects
+            : pageHits.map((hit) =>
+                clampCropRect({
+                  x: hit.x,
+                  y: hit.y,
+                  w: hit.w,
+                  h: hit.h,
+                }),
+              );
+
+        for (const rect of rects) {
+          added.push({
+            id: newId(),
+            pageIndex,
+            ...rect,
+            label: phrase,
+            source: "search",
+          });
+        }
+      }
+
       setMarks((prev) => [...prev, ...added]);
       setSelectedId(added[0]?.id ?? null);
       setStatus("idle");
@@ -467,7 +493,10 @@ export function RedactStudio() {
                             type="button"
                             onClick={() => {
                               setSelectedId(m.id);
-                              scrollToPage(m.pageIndex);
+                              pageRefs.current[m.pageIndex]?.scrollIntoView({
+                                behavior: "smooth",
+                                block: "start",
+                              });
                             }}
                             className={`flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-sm transition ${
                               selectedId === m.id
