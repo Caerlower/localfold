@@ -2,9 +2,11 @@
 
 **Private PDF tools that run entirely in your browser.**
 
+Live: [https://localfold.vercel.app](https://localfold.vercel.app)
+
 Merge, split, compress, convert, redact, OCR, and more — without uploading files to a server. Processing happens on-device. Closing the tab clears your documents from memory.
 
-[Privacy](/privacy) · No accounts · No uploads
+[Privacy](https://localfold.vercel.app/privacy) · No accounts · No uploads
 
 ---
 
@@ -24,7 +26,7 @@ All tools execute client-side using Web APIs, `pdf.js`, `pdf-lib`, Tesseract.js,
 
 ---
 
-## Quick start
+## Local development
 
 ```bash
 npm install
@@ -40,16 +42,6 @@ npm run lint    # eslint
 ```
 
 `postinstall` applies a required patch to `pptx-browser` via [patch-package](https://github.com/ds300/patch-package). Do not remove `patches/`.
-
----
-
-## Deploy (Vercel)
-
-1. Push this repo to GitHub
-2. Import the project in [Vercel](https://vercel.com/new) (Next.js is detected automatically)
-3. Optional: set `NEXT_PUBLIC_SITE_URL` to your production URL (sitemap + Open Graph)
-
-See [`.env.example`](.env.example). No other environment variables are required — there is no backend API for document processing.
 
 ---
 
@@ -75,7 +67,7 @@ patches/               # patch-package fixes (pptx-browser)
 - **UI:** Next.js 16, React 19, Tailwind CSS 4
 - **PDF:** pdf.js + `@cantoo/pdf-lib`
 - **OCR:** tesseract.js with bundled `public/tessdata`
-- **Office:** docx / pptxgenjs / pptx-browser / exceljs / xlsx
+- **Office:** docx / pptxgenjs / pptx-browser / exceljs
 
 Security headers (CSP, frame denial, etc.) are set in `next.config.ts`.
 
@@ -83,7 +75,7 @@ Security headers (CSP, frame denial, etc.) are set in `next.config.ts`.
 
 ## Privacy
 
-LocalFold is designed so document bytes never need to leave the browser tab for core tools. Hosting may still log normal page requests (IP, etc.). Details: `/privacy` in the app.
+LocalFold is designed so document bytes never need to leave the browser tab for core tools. Hosting may still log normal page requests (IP, etc.). Details: [localfold.vercel.app/privacy](https://localfold.vercel.app/privacy).
 
 ---
 
