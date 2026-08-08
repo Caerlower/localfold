@@ -2,11 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useState, type MouseEvent } from "react";
 import { List, LockKey, X } from "@phosphor-icons/react";
+import { goToTools } from "@/lib/scrollToTools";
 
 const NAV = [
-  { href: "/#tools", label: "Tools" },
+  { href: "/#tools", label: "Tools", tools: true },
   { href: "/tool/merge-pdf", label: "Merge" },
   { href: "/tool/compress-pdf", label: "Compress" },
   { href: "/tool/pdf-to-word", label: "Convert" },
@@ -14,6 +16,7 @@ const NAV = [
 ] as const;
 
 export function SiteHeader() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -23,6 +26,13 @@ export function SiteHeader() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  const onToolsClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (goToTools(pathname)) {
+      e.preventDefault();
+    }
+    setOpen(false);
+  };
 
   return (
     <header
@@ -56,6 +66,7 @@ export function SiteHeader() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={"tools" in item && item.tools ? onToolsClick : () => setOpen(false)}
               className="pressable rounded-lg px-3 py-1.5 text-[13px] font-medium text-ink-soft transition-colors duration-150 hover:bg-ink/[0.04] hover:text-ink"
             >
               {item.label}
@@ -70,6 +81,7 @@ export function SiteHeader() {
           </span>
           <Link
             href="/#tools"
+            onClick={onToolsClick}
             className="pressable hidden rounded-full bg-moss px-3.5 py-1.5 text-xs font-semibold text-paper transition-colors hover:bg-moss-deep sm:inline-flex"
           >
             Open tools
@@ -97,7 +109,7 @@ export function SiteHeader() {
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => setOpen(false)}
+                onClick={"tools" in item && item.tools ? onToolsClick : () => setOpen(false)}
                 className="pressable rounded-lg px-3 py-2.5 text-sm font-medium text-ink hover:bg-ink/[0.04]"
               >
                 {item.label}
@@ -106,7 +118,7 @@ export function SiteHeader() {
           </nav>
           <Link
             href="/#tools"
-            onClick={() => setOpen(false)}
+            onClick={onToolsClick}
             className="pressable mt-2 flex items-center justify-center rounded-full bg-moss px-4 py-2.5 text-sm font-semibold text-paper"
           >
             Open tools

@@ -55,6 +55,15 @@ export function HomePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Honor /#tools from “Open tools” / “Browse tools” after client navigation
+  useEffect(() => {
+    if (window.location.hash !== "#tools") return;
+    const t = window.setTimeout(() => {
+      toolsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, []);
+
   return (
     <div className="bg-[var(--canvas)]">
       {/* Soft glow sits on the same canvas — no second color band */}
@@ -86,13 +95,21 @@ export function HomePage() {
             </p>
 
             <div className="mt-7 flex flex-wrap items-center gap-2.5">
-              <Link
+              <a
                 href="/#tools"
+                onClick={(e) => {
+                  e.preventDefault();
+                  history.replaceState(null, "", "/#tools");
+                  toolsRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  });
+                }}
                 className="pressable inline-flex items-center gap-2 rounded-full bg-moss px-5 py-3 text-sm font-semibold text-paper transition-colors hover:bg-moss-deep"
               >
                 Browse tools
                 <ArrowRight weight="bold" className="h-4 w-4" />
-              </Link>
+              </a>
               <Link
                 href="/tool/merge-pdf"
                 className="pressable inline-flex items-center gap-2 rounded-full border border-line bg-[var(--canvas)] px-5 py-3 text-sm font-semibold text-ink transition-colors hover:border-moss/35 hover:bg-moss-soft"
