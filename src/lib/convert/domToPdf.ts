@@ -20,7 +20,8 @@ export function createOffscreenHost(widthPx = 900): HTMLDivElement {
     "pointer-events:none",
     "z-index:-1",
     "background:#fff",
-    'font-family:Calibri,Carlito,"Segoe UI",Arial,"Helvetica Neue",sans-serif',
+    // Neutral document stack — converters override; never inherit Outfit
+    'font-family:Calibri,Carlito,"Times New Roman",Arial,"Helvetica Neue",sans-serif',
     "font-size:11pt",
     "color:#111",
     "line-height:normal",
@@ -480,7 +481,7 @@ export function mountHtmlDocument(
     "box-sizing:border-box",
     "overflow:visible",
     // Document default — source CSS can override; never inherit site UI fonts
-    'font-family:Calibri,Carlito,"Segoe UI",Arial,"Helvetica Neue",sans-serif',
+    'font-family:Calibri,Carlito,"Times New Roman",Arial,"Helvetica Neue",sans-serif',
     "font-size:11pt",
     "line-height:1.45",
     "letter-spacing:normal",

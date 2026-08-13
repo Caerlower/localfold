@@ -22,6 +22,15 @@ export async function htmlStringToPdf(html: string): Promise<Uint8Array> {
   try {
     await waitForLayout(root, 400);
     await ensureOfficeFontFallbacks();
+    // Prefer faces declared in the HTML; only fill gaps with Office stand-ins
+    const { reinforceElementFonts, bakeComputedFonts } = await import(
+      "./officeFonts"
+    );
+    reinforceElementFonts(
+      root,
+      'Calibri, Carlito, "Times New Roman", Arial, sans-serif',
+    );
+    bakeComputedFonts(root);
     return await flowingElementToA4Pdf(root, {
       scale: 2.5,
       widthPx: 794,

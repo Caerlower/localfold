@@ -447,26 +447,23 @@ export async function registerOfficeFontsForPptx(
     faces = await loadFaceCache();
   } catch {
     await Promise.allSettled(
-      FACE_SPECS.filter((f) => f.family === "Calibri" || f.family === "Cambria").map(
-        (f) =>
-          renderer.registerFont(f.family, `${FONT_BASE}/${f.file}`, {
-            weight: f.weight,
-            style: f.style,
-          }),
+      FACE_SPECS.map((f) =>
+        renderer.registerFont(f.family, `${FONT_BASE}/${f.file}`, {
+          weight: f.weight,
+          style: f.style,
+        }),
       ),
     );
     return;
   }
 
   await Promise.allSettled(
-    faces
-      .filter((f) => f.family === "Calibri" || f.family === "Cambria")
-      .map((f) =>
-        renderer.registerFont(f.family, f.dataUrl, {
-          weight: f.weight,
-          style: f.style,
-        }),
-      ),
+    faces.map((f) =>
+      renderer.registerFont(f.family, f.dataUrl, {
+        weight: f.weight,
+        style: f.style,
+      }),
+    ),
   );
 
   const regular = faces.find(

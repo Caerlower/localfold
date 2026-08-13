@@ -24,6 +24,12 @@ const FEATURED: ToolId[] = [
   "redact-pdf",
 ];
 
+/** Compact Start-here labels — keep "X to Y" intact (never "Word to"). */
+function featuredLabel(title: string): string {
+  if (/\bto\b/i.test(title)) return title;
+  return title.replace(/\s+PDF$/i, "");
+}
+
 export function HomePage() {
   const [category, setCategory] = useState<CategoryId>("all");
   const [query, setQuery] = useState("");
@@ -250,8 +256,8 @@ export function HomePage() {
                   >
                     <Icon weight="duotone" className="h-5 w-5" />
                   </span>
-                  <span className="mt-3 text-[13px] font-semibold tracking-tight text-ink group-hover:text-moss-deep">
-                    {tool.title.replace(" PDF", "")}
+                  <span className="mt-3 text-[12px] font-semibold leading-snug tracking-tight text-ink group-hover:text-moss-deep sm:text-[13px]">
+                    {featuredLabel(tool.title)}
                   </span>
                 </Link>
               </li>
