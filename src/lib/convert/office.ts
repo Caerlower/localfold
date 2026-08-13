@@ -154,20 +154,25 @@ export async function wordToPdf(
   onProgress?: (msg: string) => void,
 ): Promise<Uint8Array> {
   const {
-    DOCX_HOST_CSS,
     bakeComputedFonts,
+    docxHostCss,
     ensureOfficeFontFallbacks,
+    inspectDocxFontProfile,
     primeOfficeFontsInDocument,
     reinforceElementFonts,
   } = await import("./officeFonts");
 
   onProgress?.("Loading document fonts…");
+  const docBytes = await file.arrayBuffer();
+  const fontProfile = await inspectDocxFontProfile(docBytes);
+  const hostCss = docxHostCss(fontProfile);
   await ensureOfficeFontFallbacks();
 
   onProgress?.("Rendering Word layout…");
   const { renderAsync } = await import("docx-preview");
   const host = createOffscreenHost(920);
   host.className = "lf-docx-root";
+  host.style.fontFamily = fontProfile.bodyStack;
 
   // Keep styles in a dedicated bucket (docx-preview clears styleContainer).
   // They're still in document.styleSheets for layout; we also copy them into
@@ -182,11 +187,11 @@ export async function wordToPdf(
   host.appendChild(bodyHost);
 
   const tidy = document.createElement("style");
-  tidy.textContent = DOCX_HOST_CSS;
+  tidy.textContent = hostCss;
   styleHost.appendChild(tidy);
 
   try {
-    await renderAsync(await file.arrayBuffer(), bodyHost, styleHost, {
+    await renderAsync(docBytes, bodyHost, styleHost, {
       className: "docx",
       inWrapper: true,
       ignoreWidth: false,
@@ -205,10 +210,10 @@ export async function wordToPdf(
 
     // Re-assert theme font fallbacks after docx-preview's theme <style>
     const reinforce = document.createElement("style");
-    reinforce.textContent = DOCX_HOST_CSS;
+    reinforce.textContent = hostCss;
     styleHost.appendChild(reinforce);
 
-    reinforceElementFonts(bodyHost);
+    reinforceElementFonts(bodyHost, fontProfile.bodyStack);
     await waitForLayout(host, 900);
     await ensureOfficeFontFallbacks();
     // Inline computed families so the html2canvas iframe doesn't inherit Outfit
@@ -234,8 +239,7 @@ export async function wordToPdf(
         clonedDoc.querySelector<HTMLElement>(".lf-docx-root") ||
         clonedDoc.body;
       if (clonedRoot) {
-        clonedRoot.style.fontFamily =
-          'Calibri, Carlito, "Segoe UI", Arial, sans-serif';
+        clonedRoot.style.fontFamily = fontProfile.bodyStack;
       }
     };
 
