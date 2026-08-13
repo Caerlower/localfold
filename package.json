@@ -16,6 +16,7 @@
     "docx-preview": "^0.4.0",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
+    "fontkit": "^2.0.4",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
