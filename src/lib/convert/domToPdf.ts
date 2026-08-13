@@ -100,7 +100,10 @@ export async function elementToCanvas(
   scale = 2,
   opts?: {
     /** Called with the cloned document before rasterizing (e.g. inject @font-face). */
-    onClone?: (doc: Document, cloned: HTMLElement) => void;
+    onClone?: (
+      doc: Document,
+      cloned: HTMLElement,
+    ) => void | Promise<void>;
   },
 ): Promise<HTMLCanvasElement> {
   // Near-zero opacity on offscreen hosts can yield 0×0 boxes in headless Chrome.
@@ -311,7 +314,10 @@ export async function elementsToPdf(
     pageFormat?: PdfPageFormat;
     /** Force every DOM page to the same CSS size before capture (default true). */
     normalizeBoxes?: boolean;
-    onClone?: (doc: Document, cloned: HTMLElement) => void;
+    onClone?: (
+      doc: Document,
+      cloned: HTMLElement,
+    ) => void | Promise<void>;
   },
 ): Promise<Uint8Array> {
   if (!pages.length) throw new Error("Nothing to render.");
@@ -391,7 +397,10 @@ export async function flowingElementToA4Pdf(
     scale?: number;
     widthPx?: number;
     marginPt?: number;
-    onClone?: (doc: Document, cloned: HTMLElement) => void;
+    onClone?: (
+      doc: Document,
+      cloned: HTMLElement,
+    ) => void | Promise<void>;
   },
 ): Promise<Uint8Array> {
   const scale = opts?.scale ?? 2;

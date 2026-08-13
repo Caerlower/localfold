@@ -155,8 +155,9 @@ export async function wordToPdf(
 ): Promise<Uint8Array> {
   const {
     DOCX_HOST_CSS,
+    bakeComputedFonts,
     ensureOfficeFontFallbacks,
-    injectOfficeFontsIntoDocument,
+    primeOfficeFontsInDocument,
     reinforceElementFonts,
   } = await import("./officeFonts");
 
@@ -210,6 +211,9 @@ export async function wordToPdf(
     reinforceElementFonts(bodyHost);
     await waitForLayout(host, 900);
     await ensureOfficeFontFallbacks();
+    // Inline computed families so the html2canvas iframe doesn't inherit Outfit
+    bakeComputedFonts(bodyHost);
+    await waitForLayout(host, 200);
 
     // Make host measurable/capturable for html2canvas (near-zero opacity can
     // leave some engines with 0×0 boxes in headless Chromium).
@@ -217,13 +221,21 @@ export async function wordToPdf(
     host.style.zIndex = "-1";
     void host.offsetWidth;
 
-    const onClone = (clonedDoc: globalThis.Document) => {
-      injectOfficeFontsIntoDocument(clonedDoc);
+    const onClone = async (clonedDoc: globalThis.Document) => {
+      // Base64 FontFace in the iframe — relative /fonts URLs often miss there
+      await primeOfficeFontsInDocument(clonedDoc);
       // Copy docx-preview + host CSS into the html2canvas iframe clone
       for (const node of Array.from(styleHost.querySelectorAll("style"))) {
         const clone = clonedDoc.createElement("style");
         clone.textContent = node.textContent;
         clonedDoc.head.appendChild(clone);
+      }
+      const clonedRoot =
+        clonedDoc.querySelector<HTMLElement>(".lf-docx-root") ||
+        clonedDoc.body;
+      if (clonedRoot) {
+        clonedRoot.style.fontFamily =
+          'Calibri, Carlito, "Segoe UI", Arial, sans-serif';
       }
     };
 

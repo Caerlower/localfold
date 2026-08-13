@@ -5,7 +5,7 @@ import {
 } from "./domToPdf";
 import {
   ensureOfficeFontFallbacks,
-  injectOfficeFontsIntoDocument,
+  primeOfficeFontsInDocument,
 } from "./officeFonts";
 
 export async function htmlFileToPdf(file: File): Promise<Uint8Array> {
@@ -26,7 +26,7 @@ export async function htmlStringToPdf(html: string): Promise<Uint8Array> {
       scale: 2.5,
       widthPx: 794,
       marginPt: 28,
-      onClone: (doc) => injectOfficeFontsIntoDocument(doc),
+      onClone: (doc) => primeOfficeFontsInDocument(doc),
     });
   } finally {
     host.remove();
