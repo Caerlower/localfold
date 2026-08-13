@@ -1,5 +1,5 @@
 import {
-  Document,
+  Document as DocxDocument,
   Packer,
   Paragraph,
   TextRun,
@@ -140,7 +140,7 @@ async function pdfToWordEditable(
   }
 
   pdf.cleanup();
-  const doc = new Document({
+  const doc = new DocxDocument({
     creator: "LocalFold",
     title: file.name,
     sections: [{ children }],
@@ -153,24 +153,35 @@ export async function wordToPdf(
   file: File,
   onProgress?: (msg: string) => void,
 ): Promise<Uint8Array> {
+  const {
+    DOCX_HOST_CSS,
+    ensureOfficeFontFallbacks,
+    injectOfficeFontsIntoDocument,
+    reinforceElementFonts,
+  } = await import("./officeFonts");
+
+  onProgress?.("Loading document fonts…");
+  await ensureOfficeFontFallbacks();
+
   onProgress?.("Rendering Word layout…");
   const { renderAsync } = await import("docx-preview");
   const host = createOffscreenHost(920);
+  host.className = "lf-docx-root";
+
+  // Keep styles in a dedicated bucket (docx-preview clears styleContainer).
+  // They're still in document.styleSheets for layout; we also copy them into
+  // the html2canvas clone via onClone.
   const styleHost = document.createElement("div");
-  host.appendChild(styleHost);
+  styleHost.setAttribute("data-lf-docx-styles", "1");
+  styleHost.style.cssText =
+    "position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none;";
+  document.body.appendChild(styleHost);
+
   const bodyHost = document.createElement("div");
   host.appendChild(bodyHost);
 
-  // Flatten wrapper chrome so capture matches printed page boxes
   const tidy = document.createElement("style");
-  tidy.textContent = `
-    .docx-wrapper { background: #fff !important; padding: 0 !important; }
-    .docx-wrapper > section.docx {
-      box-shadow: none !important;
-      margin: 0 !important;
-      background: #fff !important;
-    }
-  `;
+  tidy.textContent = DOCX_HOST_CSS;
   styleHost.appendChild(tidy);
 
   try {
@@ -188,15 +199,33 @@ export async function wordToPdf(
       renderFooters: true,
       renderFootnotes: true,
       renderEndnotes: true,
+      renderAltChunks: true,
     });
 
-    await waitForLayout(host, 700);
+    // Re-assert theme font fallbacks after docx-preview's theme <style>
+    const reinforce = document.createElement("style");
+    reinforce.textContent = DOCX_HOST_CSS;
+    styleHost.appendChild(reinforce);
+
+    reinforceElementFonts(bodyHost);
+    await waitForLayout(host, 900);
+    await ensureOfficeFontFallbacks();
 
     // Make host measurable/capturable for html2canvas (near-zero opacity can
     // leave some engines with 0×0 boxes in headless Chromium).
     host.style.opacity = "1";
     host.style.zIndex = "-1";
     void host.offsetWidth;
+
+    const onClone = (clonedDoc: globalThis.Document) => {
+      injectOfficeFontsIntoDocument(clonedDoc);
+      // Copy docx-preview + host CSS into the html2canvas iframe clone
+      for (const node of Array.from(styleHost.querySelectorAll("style"))) {
+        const clone = clonedDoc.createElement("style");
+        clone.textContent = node.textContent;
+        clonedDoc.head.appendChild(clone);
+      }
+    };
 
     const pages = Array.from(
       bodyHost.querySelectorAll<HTMLElement>("section.docx"),
@@ -212,6 +241,7 @@ export async function wordToPdf(
         pageFormat: "uniform",
         normalizeBoxes: true,
         onProgress,
+        onClone,
       });
     }
 
@@ -219,9 +249,14 @@ export async function wordToPdf(
     onProgress?.("Capturing document…");
     const wrapper =
       bodyHost.querySelector<HTMLElement>(".docx-wrapper") || bodyHost;
-    return await flowingElementToA4Pdf(wrapper, { scale: 2.5, widthPx: 816 });
+    return await flowingElementToA4Pdf(wrapper, {
+      scale: 2.5,
+      widthPx: 816,
+      onClone,
+    });
   } finally {
     host.remove();
+    styleHost.remove();
   }
 }
 
@@ -279,10 +314,16 @@ export async function powerpointToPdf(
 ): Promise<Uint8Array> {
   onProgress?.("Loading presentation…");
   const { PptxRenderer } = await import("pptx-browser");
+  const { registerOfficeFontsForPptx } = await import("./officeFonts");
   const { PDFDocument } = await import("@/lib/pdf");
   const renderer = new PptxRenderer();
 
   try {
+    // Local Calibri/Cambria stand-ins before load so theme fonts resolve without
+    // falling back to generic faces (or fetching Google Fonts).
+    onProgress?.("Registering document fonts…");
+    await registerOfficeFontsForPptx(renderer);
+
     await renderer.load(file, (_p: number, msg: string) => {
       if (msg) onProgress?.(msg);
     });

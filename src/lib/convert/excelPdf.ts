@@ -522,8 +522,21 @@ export async function excelToPdf(
   pdf.setTitle(file.name.replace(/\.(xlsx|xls)$/i, "") || "Spreadsheet");
   await embedSnapshot(pdf, snapshot);
 
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  // Prefer Calibri-metric TTF (Carlito) so sheets don't look like Helvetica-only
+  // browser dumps. Fall back to StandardFonts if fontkit/TTF load fails.
+  let font: PDFFont;
+  let fontBold: PDFFont;
+  try {
+    const fontkit = (await import("fontkit")).default;
+    const { loadOfficeFontBytes } = await import("./officeFonts");
+    pdf.registerFontkit(fontkit as never);
+    const faces = await loadOfficeFontBytes();
+    font = await pdf.embedFont(faces.regular, { subset: true });
+    fontBold = await pdf.embedFont(faces.bold, { subset: true });
+  } catch {
+    font = await pdf.embedFont(StandardFonts.Helvetica);
+    fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  }
 
   const pageW = PageSizes.A4[1];
   const pageH = PageSizes.A4[0];

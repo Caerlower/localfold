@@ -11,7 +11,8 @@ export async function markdownToPdf(
 <style>
   @page { margin: 0; }
   body {
-    font-family: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    /* Prefer real document faces — never inherit the LocalFold UI font */
+    font-family: Georgia, "Times New Roman", "Iowan Old Style", "Palatino Linotype", Palatino, serif;
     font-size: 11.5pt;
     line-height: 1.55;
     color: #1a1a1a;
@@ -21,7 +22,7 @@ export async function markdownToPdf(
     background: #fff;
   }
   h1, h2, h3, h4 {
-    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: Calibri, Carlito, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     line-height: 1.25;
     margin: 1.4em 0 0.45em;
     color: #111;

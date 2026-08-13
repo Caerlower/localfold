@@ -11,6 +11,22 @@ declare module "pptx-browser" {
       canvas: HTMLCanvasElement | OffscreenCanvas,
       width?: number,
     ): Promise<void>;
+    registerFont(
+      family: string,
+      source: string | URL | File | Blob | ArrayBuffer | Uint8Array,
+      descriptors?: { weight?: string; style?: string },
+    ): Promise<void>;
+    registerFonts(
+      fontMap: Record<
+        string,
+        | string
+        | Array<{
+            src: string;
+            weight?: string;
+            style?: string;
+          }>
+      >,
+    ): Promise<void>;
     toPdf(opts?: {
       width?: number;
       quality?: number;

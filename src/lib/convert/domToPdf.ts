@@ -7,6 +7,7 @@ export function createOffscreenHost(widthPx = 900): HTMLDivElement {
   // Keep the host in-document at a real viewport origin. html2canvas clones via
   // an iframe and throws "Unable to find element in cloned iframe" when the
   // node is far off-screen (e.g. left:-10000px). Near-zero opacity hides it.
+  // Explicit document font stack — never inherit LocalFold's UI font (Outfit).
   host.style.cssText = [
     "position:fixed",
     "left:0",
@@ -19,6 +20,12 @@ export function createOffscreenHost(widthPx = 900): HTMLDivElement {
     "pointer-events:none",
     "z-index:-1",
     "background:#fff",
+    'font-family:Calibri,Carlito,"Segoe UI",Arial,"Helvetica Neue",sans-serif',
+    "font-size:11pt",
+    "color:#111",
+    "line-height:normal",
+    "letter-spacing:normal",
+    "-webkit-font-smoothing:antialiased",
   ].join(";");
   document.body.appendChild(host);
   return host;
@@ -91,6 +98,10 @@ export type PdfPageFormat = keyof typeof PAGE_FORMATS | "uniform";
 export async function elementToCanvas(
   el: HTMLElement,
   scale = 2,
+  opts?: {
+    /** Called with the cloned document before rasterizing (e.g. inject @font-face). */
+    onClone?: (doc: Document, cloned: HTMLElement) => void;
+  },
 ): Promise<HTMLCanvasElement> {
   // Near-zero opacity on offscreen hosts can yield 0×0 boxes in headless Chrome.
   // Restore ancestors for the duration of the capture.
@@ -143,6 +154,9 @@ export async function elementToCanvas(
       removeContainer: true,
       // Prefer foreignObject-free path — more reliable for Word/Excel DOM
       foreignObjectRendering: false,
+      onclone: (doc, cloned) => {
+        opts?.onClone?.(doc, cloned as HTMLElement);
+      },
     });
 
   try {
@@ -297,6 +311,7 @@ export async function elementsToPdf(
     pageFormat?: PdfPageFormat;
     /** Force every DOM page to the same CSS size before capture (default true). */
     normalizeBoxes?: boolean;
+    onClone?: (doc: Document, cloned: HTMLElement) => void;
   },
 ): Promise<Uint8Array> {
   if (!pages.length) throw new Error("Nothing to render.");
@@ -345,7 +360,9 @@ export async function elementsToPdf(
   for (let i = 0; i < pages.length; i += 1) {
     opts?.onProgress?.(`Rendering page ${i + 1} of ${pages.length}…`);
     await new Promise((r) => setTimeout(r, 0));
-    const canvas = await elementToCanvas(pages[i], scale);
+    const canvas = await elementToCanvas(pages[i], scale, {
+      onClone: opts?.onClone,
+    });
 
     if (pageFormat === "uniform") {
       // One element = one full page (already page-sized)
@@ -370,7 +387,12 @@ export async function elementsToPdf(
  */
 export async function flowingElementToA4Pdf(
   target: HTMLElement,
-  opts?: { scale?: number; widthPx?: number; marginPt?: number },
+  opts?: {
+    scale?: number;
+    widthPx?: number;
+    marginPt?: number;
+    onClone?: (doc: Document, cloned: HTMLElement) => void;
+  },
 ): Promise<Uint8Array> {
   const scale = opts?.scale ?? 2;
   const widthPx = opts?.widthPx ?? 794;
@@ -384,7 +406,9 @@ export async function flowingElementToA4Pdf(
 
   await new Promise((r) => setTimeout(r, 30));
 
-  const canvas = await elementToCanvas(target, scale);
+  const canvas = await elementToCanvas(target, scale, {
+    onClone: opts?.onClone,
+  });
 
   const pageW = PAGE_FORMATS.a4.w;
   const pageH = PAGE_FORMATS.a4.h;
@@ -446,6 +470,11 @@ export function mountHtmlDocument(
     "color:#111",
     "box-sizing:border-box",
     "overflow:visible",
+    // Document default — source CSS can override; never inherit site UI fonts
+    'font-family:Calibri,Carlito,"Segoe UI",Arial,"Helvetica Neue",sans-serif',
+    "font-size:11pt",
+    "line-height:1.45",
+    "letter-spacing:normal",
   ].join(";");
 
   const parsed = new DOMParser().parseFromString(html, "text/html");
